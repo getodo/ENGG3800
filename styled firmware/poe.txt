@@ -1,0 +1,47 @@
+ACT 1
+	LINKS
+		B-B-G (Flame Dash (use Frost Blink first), Arcane Surge, Orbs of Storms)
+		B-B-B (Frost Bomb, Added Lighting(can be moved), Onslaught)
+		B-G-G (SB mine, Swift Assembly, Lesser Poison)
+		G	  (Smoke Mines)
+			
+	RECIPES
+		Topaz Ring (Iron Ring, Green Gem)
+		Wand	   (Blue Wand, Alteration, Topaz Ring)
+	
+	LOOK FOR
+		Transmutes
+		Alterations
+		Iron Rings
+		Whites/Blues to sell
+		Alteration Shards from IDing rares
+		Essences (Free alchs)
+		
+	NOTES
+		Can buy Blastchain Mine (B) and Arc (B) after finishing Act 1
+		Keep Arcane Surge low
+		
+Act 2
+	LINKS
+		B-B-B (Arc, Blastchain Mine, Elemental Focus)
+		B-B-B (Arcane Surge, Wave of Conviction, Flame Dash)
+		B-B-G (Skitterbots, Hearld of Thunder, Smoke Mine)
+		
+	GEMS
+		Wave of Conviction - The Root of the Problem
+		Elemental Focus - Sharp and Cruel
+		Hearld of Thunder/Skitterbots - Intruders in Black
+		
+	RECIPES
+		Wand (Rare Topaz Ring(use essence), Wand, Alteration)
+		DONT AUGMENT WAND We can craft res
+	
+	NOTES
+		Alira or kill all bandits is fine
+		
+Act 3
+	LINKS
+		B-B-B-B(Arc, Blastchain Mine, Elemental Focus, Added Lightning/Controlled Dest)
+
+		
+		
