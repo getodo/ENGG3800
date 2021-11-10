@@ -2,6 +2,10 @@
 /**
   ******************************************************************************
   * @file           : main.c
+  /* USER CODE BEGIN Header */
+/**
+  ******************************************************************************
+  * @file           : main.c
   * @brief          : Main program body
   ******************************************************************************
   * @attention
@@ -64,9 +68,12 @@
 /* USER CODE BEGIN PM */
 void xlrmodes_angle_conversion();
 void xlrmodes_switch();
+void read_png();
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+ADC_HandleTypeDef hadc1;
+
 DAC_HandleTypeDef hdac1;
 DMA_HandleTypeDef hdma_dac_ch1;
 
@@ -80,15 +87,11 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim6;
 
 UART_HandleTypeDef huart1;
-u8g2_t u8g2;
-
-RTC_TimeTypeDef sTime;
 
 /* USER CODE BEGIN PV */
-int orientation = CLOCK_MODE;
+int orientation = STOPWATCH_MODE;
+int previousOrientation = STOPWATCH_MODE;
 int flag = 0;
-int zed = 6;
-int freq = 4;
 int volume = 1;
 int count = 0;
 int wavPages = 0;
@@ -97,10 +100,12 @@ int volMode = 0;
 int volTime = 0;
 int readPng = 0;
 int usb = 0;
+int currentPageDMA = 0;
+int timeSync = 0;
+int cradleFlag = 0;
 int volSeg, previousSeg, currentSeg, uartBuffLen, currentVolume;
 double pitchAngle, rollAngle, volAngle, volCircle;
 float temp, humid;
-char time[16];
 char rxBuffer[2046];
 char pngBuffer[1200];
 char uartBuff[50];
@@ -108,28 +113,50 @@ char tempRead[20] = {0};
 char humidRead[20] = {0};
 char modeName[6] = {0};
 char accelSend[64];
+char timerbuffer[30]= {"00:00:00:000"};
+char clockbuffer[10];
+char minuteBuffer[10];
+char secondBuffer[10];
+char stopWatchMode[20] = {"STOPWATCH"};
+char pmam[10];
+uint8_t *p;
 uint8_t rxByte;
 uint8_t pot_addr[1] = {0};
 uint8_t pot_res[1] = {64};
 uint16_t tempBuffer[12];
 uint16_t humidBuffer[12];
 volatile uint16_t rxData;
-uint32_t val[64];
 uint32_t lux;
 uint32_t luxBuffer[13];
+uint32_t wavBuffer[256];
 int32_t CH1_DC = 0;
 uint32_t currentTime = 0;
 uint32_t previousTime = 0;
 uint32_t currentVolTime = 0;
 uint32_t currentUsbTime = 0;
+uint32_t currentCradleTime = 0;
+uint32_t rtcDebounce = 0;
+int tapCounter = 0;
+int startStopwatch = 0;
+uint32_t lastSwitchHigh = 0;
+uint32_t lastPBHigh = 0;
+uint32_t lastTapTime = 0;
+uint32_t stopwatchTimer = 0;
+uint32_t stopwatchTimeStarted = 0;
+uint32_t stopwatchTotalPausedTime = 0;
+uint32_t stopwatchPausedTime = 0;
+int isStopwatchRunning = 0;
+int isStopwatchPaused = 0;
+uint32_t resetTime = 0;
+u8g2_t u8g2;
+RTC_TimeTypeDef sTime;
+RTC_DateTypeDef sDate;
+float batteryAdc;
+float batteryVolt;
+char batteryBuffer[10];
+int alarmMode = 0;
+char *ptr = &rxBuffer[0];
 
-
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart)
-{
-	HAL_UART_Receive_IT(&huart1, (uint8_t*)&rxData, 1);
-	rxBuffer[count] = rxData;
-	count++;
-}
 
 uint8_t vol_mute[1024] = {
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -433,109 +460,268 @@ uint8_t usbImageVert[] = {
 		0xC0, 0xFF, 0x01, 0x80, 0xFF, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x08, 0x00
 };
 
-uint32_t wave_32[32] = {
-	128, 153, 178, 200, 220, 236, 247, 254, 255, 251, 242, 228, 211, 189, 166,
-	140, 115, 89, 66, 44, 27, 13, 4, 0, 1, 8, 19, 35, 55, 77,
-	102, 127
+uint16_t wavTest[] = {
+		128, 128, 129, 130, 131, 131, 132, 133, 134, 135, 135, 136, 137, 138, 138,
+		139, 140, 141, 142, 142, 143, 144, 145, 145, 146, 147, 148, 149, 149, 150,
+		151, 152, 152, 153, 154, 155, 155, 156, 157, 158, 159, 159, 160, 161, 162,
+		162, 163, 164, 165, 165, 166, 167, 168, 168, 169, 170, 170, 171, 172, 173,
+		173, 174, 175, 176, 176, 177, 178, 178, 179, 180, 181, 181, 182, 183, 183,
+		184, 185, 186, 186, 187, 188, 188, 189, 190, 190, 191, 192, 192, 193, 194,
+		194, 195, 196, 196, 197, 198, 198, 199, 200, 200, 201, 202, 202, 203, 204,
+		204, 205, 205, 206, 207, 207, 208, 208, 209, 210, 210, 211, 211, 212, 213,
+		213, 214, 214, 215, 215, 216, 217, 217, 218, 218, 219, 219, 220, 220, 221,
+		222, 222, 223, 223, 224, 224, 225, 225, 226, 226, 227, 227, 228, 228, 229,
+		229, 230, 230, 230, 231, 231, 232, 232, 233, 233, 234, 234, 234, 235, 235,
+		236, 236, 237, 237, 237, 238, 238, 239, 239, 239, 240, 240, 240, 241, 241,
+		241, 242, 242, 242, 243, 243, 243, 244, 244, 244, 245, 245, 245, 246, 246,
+		246, 247, 247, 247, 247, 248, 248, 248, 248, 249, 249, 249, 249, 250, 250,
+		250, 250, 250, 251, 251, 251, 251, 251, 252, 252, 252, 252, 252, 252, 253,
+		253, 253, 253, 253, 253, 253, 254, 254, 254, 254, 254, 254, 254, 254, 254,
+		254, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+		255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+		255, 254, 254, 254, 254, 254, 254, 254, 254, 254, 254, 253, 253, 253, 253,
+		253, 253, 253, 253, 252, 252, 252, 252, 252, 251, 251, 251, 251, 251, 251,
+		250, 250, 250, 250, 249, 249, 249, 249, 248, 248, 248, 248, 247, 247, 247,
+		247, 246, 246, 246, 245, 245, 245, 245, 244, 244, 244, 243, 243, 243, 242,
+		242, 242, 241, 241, 241, 240, 240, 239, 239, 239, 238, 238, 238, 237, 237,
+		236, 236, 235, 235, 235, 234, 234, 233, 233, 232, 232, 232, 231, 231, 230,
+		230, 229, 229, 228, 228, 227, 227, 226, 226, 225, 225, 224, 224, 223, 223,
+		222, 222, 221, 221, 220, 220, 219, 219, 218, 217, 217, 216, 216, 215, 215,
+		214, 213, 213, 212, 212, 211, 211, 210, 209, 209, 208, 208, 207, 206, 206,
+		205, 204, 204, 203, 203, 202, 201, 201, 200, 199, 199, 198, 197, 197, 196,
+		195, 195, 194, 193, 193, 192, 191, 191, 190, 189, 189, 188, 187, 187, 186,
+		185, 185, 184, 183, 182, 182, 181, 180, 180, 179, 178, 177, 177, 176, 175,
+		175, 174, 173, 172, 172, 171, 170, 169, 169, 168, 167, 166, 166, 165, 164,
+		163, 163, 162, 161, 160, 160, 159, 158, 157, 157, 156, 155, 154, 154, 153,
+		152, 151, 150, 150, 149, 148, 147, 147, 146, 145, 144, 144, 143, 142, 141,
+		140, 140, 139, 138, 137, 136, 136, 135, 134, 133, 133, 132, 131, 130, 129,
+		129, 128, 127, 126, 126, 125, 124, 123, 122, 122, 121, 120, 119, 119, 118,
+		117, 116, 115, 115, 114, 113, 112, 111, 111, 110, 109, 108, 108, 107, 106,
+		105, 105, 104, 103, 102, 101, 101, 100, 99, 98, 98, 97, 96, 95, 95,
+		94, 93, 92, 92, 91, 90, 89, 89, 88, 87, 86, 86, 85, 84, 83,
+		83, 82, 81, 80, 80, 79, 78, 78, 77, 76, 75, 75, 74, 73, 73,
+		72, 71, 70, 70, 69, 68, 68, 67, 66, 66, 65, 64, 64, 63, 62,
+		62, 61, 60, 60, 59, 58, 58, 57, 56, 56, 55, 54, 54, 53, 52,
+		52, 51, 51, 50, 49, 49, 48, 47, 47, 46, 46, 45, 44, 44, 43,
+		43, 42, 42, 41, 40, 40, 39, 39, 38, 38, 37, 36, 36, 35, 35,
+		34, 34, 33, 33, 32, 32, 31, 31, 30, 30, 29, 29, 28, 28, 27,
+		27, 26, 26, 25, 25, 24, 24, 23, 23, 23, 22, 22, 21, 21, 20,
+		20, 20, 19, 19, 18, 18, 17, 17, 17, 16, 16, 16, 15, 15, 14,
+		14, 14, 13, 13, 13, 12, 12, 12, 11, 11, 11, 10, 10, 10, 10,
+		9, 9, 9, 8, 8, 8, 8, 7, 7, 7, 7, 6, 6, 6, 6,
+		5, 5, 5, 5, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3,
+		2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2,
+		2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4,
+		4, 5, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 8,
+		8, 8, 8, 9, 9, 9, 10, 10, 10, 11, 11, 11, 12, 12, 12,
+		13, 13, 13, 14, 14, 14, 15, 15, 15, 16, 16, 16, 17, 17, 18,
+		18, 18, 19, 19, 20, 20, 21, 21, 21, 22, 22, 23, 23, 24, 24,
+		25, 25, 25, 26, 26, 27, 27, 28, 28, 29, 29, 30, 30, 31, 31,
+		32, 32, 33, 33, 34, 35, 35, 36, 36, 37, 37, 38, 38, 39, 40,
+		40, 41, 41, 42, 42, 43, 44, 44, 45, 45, 46, 47, 47, 48, 48,
+		49, 50, 50, 51, 51, 52, 53, 53, 54, 55, 55, 56, 57, 57, 58,
+		59, 59, 60, 61, 61, 62, 63, 63, 64, 65, 65, 66, 67, 67, 68,
+		69, 69, 70, 71, 72, 72, 73, 74, 74, 75, 76, 77, 77, 78, 79,
+		79, 80, 81, 82, 82, 83, 84, 85, 85, 86, 87, 87, 88, 89, 90,
+		90, 91, 92, 93, 93, 94, 95, 96, 96, 97, 98, 99, 100, 100, 101,
+		102, 103, 103, 104, 105, 106, 106, 107, 108, 109, 110, 110, 111, 112, 113,
+		113, 114, 115, 116, 117, 117, 118, 119, 120, 120, 121, 122, 123, 124, 124,
+		125, 126, 127, 127
 };
 
-uint32_t wave_32_temp[32] = {
-	128, 153, 178, 200, 220, 236, 247, 254, 255, 251, 242, 228, 211, 189, 166,
-	140, 115, 89, 66, 44, 27, 13, 4, 0, 1, 8, 19, 35, 55, 77,
-	102, 127
-};
+/**
+  * @brief  External interrupts
+  * @param  uint16_t GPIO_Pin
+  * @retval none
+  */
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+	if (GPIO_Pin == GPIO_PIN_3) { //Check if switch is on
+		if (HAL_GetTick() - lastSwitchHigh >= 200 ) { //debounce switch
+			if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_3)) {
+				/*while switch is on speed up RTC clock*/
+				hrtc.Init.AsynchPrediv = 2;
+				  if (HAL_RTC_Init(&hrtc) != HAL_OK) {
+				    Error_Handler();
+				  }
+			} else {
+				/*Run normal RTC time*/
+				hrtc.Init.AsynchPrediv = 127;
+				  if (HAL_RTC_Init(&hrtc) != HAL_OK) {
+				    Error_Handler();
+				  }
+			}
+		}
+		lastSwitchHigh = HAL_GetTick();
+	}
 
-uint32_t wave_64[64] = {
-	128, 140, 153, 165, 177, 188, 199, 209, 219, 227, 235, 241, 246, 250, 253,
-	255, 255, 254, 252, 248, 244, 238, 231, 223, 214, 204, 194, 183, 171, 159,
-	147, 134, 121, 108, 96, 84, 72, 61, 51, 41, 32, 24, 17, 11, 7,
-	3, 1, 0, 0, 2, 5, 9, 14, 20, 28, 36, 46, 56, 67, 78,
-	90, 102, 115, 127
-};
-
-uint8_t byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
-    switch (msg) {
-
-        case U8X8_MSG_BYTE_INIT:
-            /* disable chipselect */
-            HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-            break;
-
-        case U8X8_MSG_BYTE_SEND:
-            HAL_SPI_Transmit(&hspi1, (uint8_t *)arg_ptr, arg_int, 0xFF);
-            break;
-
-        case U8X8_MSG_BYTE_START_TRANSFER:
-            HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
-            HAL_Delay(1);
-            break;
-
-        case U8X8_MSG_BYTE_END_TRANSFER:
-            HAL_Delay(1);
-            HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
-            break;
-
-        case U8X8_MSG_BYTE_SET_DC:
-            break;
-
-        default:
-            return 0;
-    }
-    return 1;
-}
-
-uint8_t GPIO_and_delay_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
-    switch (msg) {
-
-        case U8X8_MSG_GPIO_AND_DELAY_INIT:
-            break;
-
-        case U8X8_MSG_DELAY_MILLI:
-            HAL_Delay(arg_int);
-            break;
-
-        case U8X8_MSG_DELAY_NANO:
-            __asm__("nop");
-            break;
-
-        default:
-            return 0;
-    }
-    return 1;
-}
-
-void generate_sinwave(int zed)
-{
-	for(int i = 0; i < 64; i++) {
-		val[i] = (sin((5) * i * 2 * M_PI/64)*zed/2);
+	if (GPIO_Pin == GPIO_PIN_2) { // which if button input has been pressed
+		if (HAL_GetTick() - lastPBHigh >= 200) { // debounce button
+			/*toggle alarm mode*/
+			alarmMode = ~alarmMode;
+			if (!alarmMode) {
+				HAL_RTC_DeactivateAlarm(&hrtc, RTC_ALARM_A);
+			} else {
+				/*Set alarm time*/
+				RTC_AlarmTypeDef sAlarm = {0};
+				sAlarm.AlarmTime.Hours = *(ptr + 6) * 10 + *(ptr + 7);
+				sAlarm.AlarmTime.Minutes = *(ptr + 8) * 10 + *(ptr + 9);
+				sAlarm.AlarmTime.Seconds = *(ptr + 10) * 10 + *(ptr + 11);
+				sAlarm.AlarmTime.SubSeconds = 0x0;
+				HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BIN);
+			}
+		}
+		lastPBHigh = HAL_GetTick();
 	}
 }
 
-void transmit_sensor_values()
-{
-	temp = hts221_read_temp();
-//	sprintf(tempBuffer, "temp:%.2f\n", temp);
-//	HAL_UART_Transmit(&huart1, (uint8_t*)tempBuffer, sizeof(tempBuffer), 100);
-//	HAL_Delay(5);
-
-	humid = hts221_read_humid();
-//	sprintf(humidBuffer, "humid:%.2f\n", humid);
-//	HAL_UART_Transmit(&huart1, (uint8_t*)humidBuffer, sizeof(humidBuffer), 100);
-//	HAL_Delay(50);
-
-	lux = veml7700_read_als();
-//	sprintf(luxBuffer, "light:%06lu\n", lux);
-//	HAL_UART_Transmit(&huart1, (uint8_t*)luxBuffer, sizeof(luxBuffer), 100);
-//	HAL_Delay(5);
-//
-//	uartBuffLen = sprintf(accelSend, "accel_x:%d\naccel_y:%d\naccel_z:%d\n", x, y, z);
-//	HAL_UART_Transmit(&huart1, (uint8_t*)accelSend, uartBuffLen, 100);
-//	HAL_Delay(5);
-
-	TIM1->CCR1 = CH1_DC;
-	CH1_DC = 50000;
+/**
+  * @brief  UART interrupt function
+  * @param  none
+  * @retval none
+  */
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef* huart) {
+	HAL_UART_Receive_IT(&huart1, (uint8_t*)&rxData, 1);
+	rxBuffer[count] = rxData;
+	count++;
 }
 
+/**
+  * @brief  DAC output interrupt function
+  * @param  none
+  * @retval none
+  */
+void HAL_DAC_ConvCpltCallbackCh1(DAC_HandleTypeDef *hdac) {
+	HAL_DAC_SetValue(&hdac1, DAC_CHANNEL_1, DAC_ALIGN_12B_R, *wavBuffer);
+	currentPageDMA++;
+	if(currentPageDMA == wavPages) {
+		currentPageDMA = 0;
+		HAL_DAC_Stop_DMA(&hdac1, DAC_CHANNEL_1);
+	}
+}
+
+/**
+  * @brief  Read pages from EEPROM for .wav file
+  * @param  none
+  * @retval none
+  */
+void read_wav_from_eeprom() {
+	// Load in the wav from eeprom. Does not work in callback
+	// so we need a seperate function to do this
+	uint8_t *ptr;
+	ptr = m95m02_read_page(5 + currentPageDMA);
+	for(uint32_t i = 0; i < 256; i++) {
+		wavBuffer[i] = *(ptr + i);
+	}
+	currentPageDMA++;
+	if(currentPageDMA == (wavPages - 1)) {
+		currentPageDMA = 0;
+	}
+}
+
+/**
+  * @brief
+  * @param  u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr
+  * @retval uint8_t byte_cb
+  */
+uint8_t byte_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
+    switch (msg) {
+    case U8X8_MSG_BYTE_INIT:
+    	/* disable chipselect */
+        HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
+        break;
+    case U8X8_MSG_BYTE_SEND:
+        HAL_SPI_Transmit(&hspi1, (uint8_t *)arg_ptr, arg_int, 0xFF);
+        break;
+    case U8X8_MSG_BYTE_START_TRANSFER:
+        HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_SET);
+        HAL_Delay(1);
+        break;
+    case U8X8_MSG_BYTE_END_TRANSFER:
+    	HAL_Delay(1);
+    	HAL_GPIO_WritePin(CS_PORT, CS_PIN, GPIO_PIN_RESET);
+        break;
+    case U8X8_MSG_BYTE_SET_DC:
+        break;
+    default:
+        return 0;
+    }
+    return 1;
+}
+
+/**
+  * @brief
+  * @param  u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr
+  * @retval uint8_t byte_cb
+  */
+uint8_t GPIO_and_delay_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg_int, void *arg_ptr) {
+    switch (msg) {
+    case U8X8_MSG_GPIO_AND_DELAY_INIT:
+    	break;
+    case U8X8_MSG_DELAY_MILLI:
+    	HAL_Delay(arg_int);
+    	break;
+    case U8X8_MSG_DELAY_NANO:
+    	__asm__("nop");
+    	break;
+    default:
+    	return 0;
+    }
+    return 1;
+}
+
+/**
+  * @brief  Transmit sensor values via UART
+  * @param  none
+  * @retval none
+  */
+void transmit_sensor_values() {
+	temp = hts221_read_temp();
+	sprintf(tempBuffer, "temp:%.2f\n", temp);
+	HAL_UART_Transmit(&huart1, (uint8_t*)tempBuffer, sizeof(tempBuffer), 0xFF);
+	humid = hts221_read_humid();
+	sprintf(humidBuffer, "humid:%.2f\n", humid);
+	HAL_UART_Transmit(&huart1, (uint8_t*)humidBuffer, sizeof(humidBuffer), 0xFF);
+	lux = veml7700_read_als();
+	sprintf(luxBuffer, "light:%06lu\n", lux);
+	HAL_UART_Transmit(&huart1, (uint8_t*)luxBuffer, sizeof(luxBuffer), 0xFF);
+	sprintf(accelSend, "\naccel_x:%d\naccel_y:%d\naccel_z:%d\n", x, y, z);
+	HAL_UART_Transmit(&huart1, (uint8_t*)accelSend, sizeof(accelSend), 100);
+	uartBuffLen = sprintf(uartBuff, "volume:%02d\n", currentSeg);
+	HAL_UART_Transmit(&huart1, (uint8_t *)uartBuff, sizeof(uartBuff), 0xFF);
+	uartBuffLen = sprintf(uartBuff, "mode:%d\n", orientation);
+	HAL_UART_Transmit(&huart1, (uint8_t *)uartBuff, sizeof(uartBuff), 0xFF);
+	TIM1->CCR1 = CH1_DC;
+
+	/*check if device is in cradle position*/
+	if(pitchAngle < 65 && pitchAngle > 55
+			|| pitchAngle < -55 && pitchAngle > -65
+			|| rollAngle < -55 && rollAngle > -65
+			|| rollAngle < 65 && rollAngle > 55) {
+		if(cradleFlag == 0) {
+			currentCradleTime = HAL_GetTick();
+			cradleFlag = 1;
+		}
+	}
+	else {
+		cradleFlag = 0;
+	}
+
+	if(HAL_GetTick() - currentCradleTime >= 3000 && cradleFlag == 1) {
+		CH1_DC = 800; /*set brightness to low when in cradle position for 3 seconds*/
+	}
+	else {
+		CH1_DC = lux * 1.5;
+	}
+}
+
+/**
+  * @brief  Initialise sensor drivers
+  * @param  none
+  * @retval none
+  */
 void init_drivers()
 {
 	adxl_init();
@@ -543,10 +729,15 @@ void init_drivers()
 	veml7700_init();
 	hts221_init();
 	m95m02_init();
+	currentSeg = m95m02_read_byte(0);
 }
 
-void init_lcd()
-{
+/**
+  * @brief  Initialise LCD
+  * @param  none
+  * @retval none
+  */
+void init_lcd() {
 	u8g2_Setup_st7920_s_128x64_f(&u8g2, U8G2_R0, byte_cb, GPIO_and_delay_cb);
 	u8g2_InitDisplay(&u8g2);
 	u8g2_SetPowerSave(&u8g2, 0);
@@ -557,175 +748,269 @@ void init_lcd()
 	u8g2_SendBuffer(&u8g2);
 }
 
-// Read the eeprom for the png file. The png file will be from page 2 - 5
-// and be 1024 bytes
-void read_png()
-{
-	for(uint32_t i = 256; i < 1280; i++)
-	{
-		rxByte = m95m02_read_byte(i);
-		pngBuffer[i - 256] = rxByte;
+/**
+  * @brief  read png data from EEPROM
+  * @param  none
+  * @retval none
+  */
+void read_png() {
+	for(uint32_t i = 1; i < 5; i++) {
+		p = m95m02_read_page(i);
+		for(int j = 0; j < 256; j++) {
+			pngBuffer[j + ((i - 1) * 256)] = *(p + j);
+		}
 	}
-	//u8g2_DrawXBM(&u8g2, 0, 0, 64, 128, (uint8_t *)pngBuffer);
 }
 
+/**
+  * @brief  Set mode on display by orientation
+  * @param  none
+  * @retval none
+  */
 void display_mode()
 {
+	u8g2_ClearBuffer(&u8g2);
+
 	sprintf(tempRead, "%.1f%c%c", temp, 176, 67);
 	sprintf(humidRead, "%.1f%cRH", humid, 37);
-	if(orientation == STOPWATCH_MODE)
-	{
+	if(orientation == STOPWATCH_MODE) {
 		readPng = 0;
 		u8g2_ClearBuffer(&u8g2);
 		u8g2_SetFontDirection(&u8g2, 1);
-		if(usb)
-		{
-			u8g2_DrawXBM(&u8g2, 40, 92, 24, 32, (uint8_t *)usbImageVert);
+		if(usb) {
+			u8g2_DrawXBM(&u8g2, 0, 45, 24, 32, (uint8_t *)usbImageVert);
 		}
-		u8g2_SetFont(&u8g2, u8g2_font_artossans8_8u);
-		u8g2_DrawUTF8(&u8g2, 20, 24, modeName);
+		u8g2_SetFont(&u8g2, u8g2_font_10x20_mf);
+		u8g2_DrawUTF8(&u8g2, 50, 20, stopWatchMode);
+		u8g2_DrawUTF8(&u8g2, 20, 5, timerbuffer);
 		u8g2_SetDisplayRotation(&u8g2, U8G2_R3);
 		u8g2_SendBuffer(&u8g2);
-	}
-	else if(orientation == TEMPERATURE_MODE)
-	{
+	} else if(orientation == TEMPERATURE_MODE) {
 		readPng = 0;
 		u8g2_ClearBuffer(&u8g2);
 		u8g2_SetFontDirection(&u8g2, 1);
-		if(usb)
-		{
-			u8g2_DrawXBM(&u8g2, 105, 30, 24, 32, (uint8_t *)usbImageVert);
+		if(usb) {
+			u8g2_DrawXBM(&u8g2, 0, 15, 24, 32, (uint8_t *)usbImageVert);
 		}
+		u8g2_SetFont(&u8g2, u8g2_font_10x20_mf);
+		u8g2_DrawStr(&u8g2, 100, 10, "TEMP");
+		u8g2_DrawStr(&u8g2, 50, 5, "HUMID");
 		u8g2_SetFont(&u8g2, u8g2_font_t0_17_mf);
-		u8g2_DrawUTF8(&u8g2, 40, 0, humidRead);
+		u8g2_DrawUTF8(&u8g2, 25, 0, humidRead);
 		u8g2_DrawUTF8(&u8g2, 75, 5, tempRead);
 		u8g2_SetDisplayRotation(&u8g2, U8G2_R2);
 		u8g2_SendBuffer(&u8g2);
-	}
-	else if(orientation == BATTERY_MODE)
-	{
+	} else if(orientation == BATTERY_MODE) {
 		readPng = 0;
 		u8g2_ClearBuffer(&u8g2);
 		u8g2_SetFontDirection(&u8g2, 1);
-		if(usb)
-		{
+		u8g2_SetFont(&u8g2, u8g2_font_inr21_mf);
+		sprintf(batteryBuffer, "%.2fV", batteryVolt);
+		if(usb) {
 			u8g2_DrawXBM(&u8g2, 40, 92, 24, 32, (uint8_t *)usbImageVert);
 		}
-		u8g2_DrawUTF8(&u8g2, 50, 10, modeName);
+		u8g2_DrawUTF8(&u8g2, 20, 15, batteryBuffer);
 		u8g2_SetDisplayRotation(&u8g2, U8G2_R1);
 		u8g2_SendBuffer(&u8g2);
-	}
-	else if(orientation == CLOCK_MODE)
-	{
-
+	} else if(orientation == CLOCK_MODE) {
 		u8g2_ClearBuffer(&u8g2);
-		if(readPng == 0)
-		{
+		if(readPng == 0) {
 			read_png();
 		}
-		if(usb)
-		{
+		if(usb) {
+			u8g2_SetDrawColor(&u8g2, 1);
 			u8g2_DrawXBM(&u8g2, 105, 30, 24, 32, (uint8_t *)usbImageVert);
 		}
+		u8g2_SetDrawColor(&u8g2, 1);
 		u8g2_DrawXBM(&u8g2, 0, 0, 64, 128, (uint8_t *)pngBuffer);
-		u8g2_DrawStr(&u8g2, 0, 20, modeName);
-		u8g2_SetFont(&u8g2, u8g2_font_t0_17_mf);
+
+		u8g2_SetDrawColor(&u8g2, 0);
+		u8g2_DrawBox(&u8g2, 0, 20, 31, 30); //64 is width 32 is height
+		u8g2_DrawBox(&u8g2, 0, 52, 31, 30); //64 is width 32 is height
+		u8g2_DrawBox(&u8g2, 33, 20, 32, 30); //64 is width 32 is height
+		u8g2_DrawBox(&u8g2, 0, 84, 32, 30); //64 is width 32 is height
+
+		u8g2_SetDrawColor(&u8g2, 1);
+		u8g2_DrawStr(&u8g2, 0, 48, (char *)clockbuffer);
+		u8g2_DrawStr(&u8g2, 0, 80, (char *)minuteBuffer);
+		u8g2_DrawStr(&u8g2, 0, 112, (char *)secondBuffer);
+		u8g2_DrawStr(&u8g2, 32, 48, (char *)pmam);
+		u8g2_SetFont(&u8g2, u8g2_font_inr19_mf);
 		u8g2_SetFontDirection(&u8g2, 0);
+
 		u8g2_SetDisplayRotation(&u8g2, U8G2_R1);
 		u8g2_SendBuffer(&u8g2);
 		readPng = 1;
 	}
-	else if(orientation == VOLUME_MODE)
-	{
+	else if(orientation == VOLUME_MODE) {
 		readPng = 0;
 		u8g2_ClearBuffer(&u8g2);
 		u8g2_SetDisplayRotation(&u8g2, U8G2_R0);
-		if(currentSeg == 0)
-		{
+		if(currentSeg == 0) {
+			change_volume(0);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol_mute);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 1)
-		{
+		} else if(currentSeg == 1) {
+			change_volume(20);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol1);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 2)
-		{
+		} else if(currentSeg == 2) {
+			change_volume(40);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol2);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 3)
-		{
+		} else if(currentSeg == 3) {
+			change_volume(60);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol3);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 4)
-		{
+		} else if(currentSeg == 4) {
+			change_volume(80);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol4);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 5)
-		{
+		} else if(currentSeg == 5) {
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol5);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 6)
-		{
+		} else if(currentSeg == 6) {
+			change_volume(100);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol6);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 7)
-		{
+		} else if(currentSeg == 7) {
+			change_volume(120);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol7);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 8)
-		{
+		} else if(currentSeg == 8) {
+			change_volume(140);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol8);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 9)
-		{
+		} else if(currentSeg == 9) {
+			change_volume(160);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol9);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 10)
-		{
+		} else if(currentSeg == 10) {
+			change_volume(180);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol10);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 11)
-		{
+		} else if(currentSeg == 11) {
+			change_volume(200);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol11);
 			u8g2_SendBuffer(&u8g2);
-		}
-		else if(currentSeg == 12)
-		{
+		} else if(currentSeg == 12) {
+			change_volume(220);
 			u8g2_DrawXBM(&u8g2, 0, 0, 128, 64, (uint8_t *)vol12);
 			u8g2_SendBuffer(&u8g2);
 		}
 	}
 }
 
+/**
+  * @brief  Update Time from RTC
+  * @param  none
+  * @retval none
+  */
+void update_time()
+{
+	HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+	HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+	if(timeSync == 1) {
+		if(sTime.Hours >= 12) {
+			sprintf(pmam, "PM");
+		} else {
+			sprintf(pmam, "AM");
+		}
+		if(sTime.Hours >= 13) { //convert 24Hr time to 12Hr
+			sTime.Hours = sTime.Hours - 12;
+			sprintf(clockbuffer, "%02d", sTime.Hours);
+			sprintf(minuteBuffer, "%02d", sTime.Minutes);
+			sprintf(secondBuffer, "%02d", sTime.Seconds);
+			sprintf(pmam, "PM");
+		} else {
+			sprintf(clockbuffer, "%02d", sTime.Hours);
+			sprintf(minuteBuffer, "%02d", sTime.Minutes);
+			sprintf(secondBuffer, "%02d", sTime.Seconds);
+			sprintf(pmam, "AM");
+		}
+	}
+}
+
+/**
+  * @brief  init USB when connected
+  * @param  none
+  * @retval none
+  */
 void usb_mode_init()
 {
 	usb = 1;
 	currentUsbTime  = HAL_GetTick();
 }
+
+/**
+  * @brief  Stopwatch Timer function
+  * @param  none
+  * @retval none
+  */
+void stopwatch_timer()
+{
+	if ((pause == 1 && orientation == STOPWATCH_MODE)
+			|| (previousOrientation != orientation
+			&&	previousOrientation == STOPWATCH_MODE
+			&&	isStopwatchPaused == 0)) {
+		lastTapTime = HAL_GetTick(); // Tracks when the timer is paused
+		if (isStopwatchRunning) {
+			isStopwatchPaused ^= 1;
+			stopwatchTotalPausedTime += stopwatchPausedTime; //measure total time paused
+			stopwatchPausedTime = 0;
+		} else {
+			stopwatchTimeStarted = lastTapTime;
+			isStopwatchRunning = 1;
+		}
+		pause = 0;
+	}
+	if(reset == 1 && orientation == STOPWATCH_MODE) {
+		resetTime = stopwatchTimer + resetTime;
+		reset ^= 1;
+	}
+	if (isStopwatchRunning) {
+		if (!isStopwatchPaused) {
+			stopwatchTimer = HAL_GetTick() - resetTime - stopwatchTimeStarted - stopwatchTotalPausedTime; // This variable stores the time
+			sprintf(timerbuffer, "%02lu:%02lu:%02lu:%03lu\n\r",
+					(stopwatchTimer / 1000 / 60 / 24) % 24, (stopwatchTimer / 1000 / 60) % 60,
+						(stopwatchTimer / 1000) % 60, (stopwatchTimer % 1000));
+			// Stopwatch running
+		}
+		else {
+			// Stopwatch paused
+			stopwatchPausedTime = HAL_GetTick() - lastTapTime;
+		}
+	}
+}
+
+/**
+  * @brief  Change volume through digital pot
+  * @param  none
+  * @retval none
+  */
+void change_volume(uint8_t volume)
+{
+	pot_res[0] = volume;
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&pot_addr, 1, 0xFF);
+	HAL_SPI_Transmit(&hspi1, (uint8_t *)&pot_res, 1, 0xFF);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+}
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
-static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
-static void MX_I2C1_Init(void);
 static void MX_DAC1_Init(void);
-static void MX_TIM6_Init(void);
+static void MX_I2C1_Init(void);
+static void MX_SPI1_Init(void);
 static void MX_TIM1_Init(void);
+static void MX_TIM6_Init(void);
 static void MX_RTC_Init(void);
+static void MX_ADC1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -762,26 +1047,40 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
-  MX_DMA_Init();
-  MX_SPI1_Init();
-  MX_USART1_UART_Init();
-  MX_I2C1_Init();
-  MX_DAC1_Init();
-  MX_TIM6_Init();
-  MX_TIM1_Init();
-  MX_RTC_Init();
-  /* USER CODE BEGIN 2 */
+	MX_GPIO_Init();
+	MX_DMA_Init();
+	MX_USART1_UART_Init();
+	MX_DAC1_Init();
+	MX_I2C1_Init();
+	MX_SPI1_Init();
+	MX_TIM1_Init();
+	MX_TIM6_Init();
+	MX_RTC_Init();
+	MX_ADC1_Init();
+	/* USER CODE BEGIN 2 */
+
+	/*set initial time for RTC*/
+	sTime.Hours = 0;
+	sTime.Minutes = 0;
+	sTime.Seconds = 0;
+	HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+	HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+	HAL_RTC_GetDate(&hrtc, &sDate, RTC_FORMAT_BIN);
+
+	sprintf(clockbuffer, "%02d", sTime.Hours);
+	sprintf(minuteBuffer, "%02d", sTime.Minutes);
+	sprintf(secondBuffer, "%02d", sTime.Seconds);
+	sprintf(pmam, "??");
+
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+	HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET);
 
 	init_drivers();
 	init_lcd();
-	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_SET);
+	read_png();
 
-	//HAL_TIM_Base_Start(&htim2);
 	HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
-	generate_sinwave(50);
-	HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, wave_32_temp, 32, DAC_ALIGN_8B_R);
-	//HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, wave_64, 64, DAC_ALIGN_8B_R);
+	HAL_TIM_Base_Start(&htim6);
 
   /* USER CODE END 2 */
 
@@ -789,18 +1088,21 @@ int main(void)
   /* USER CODE BEGIN WHILE */
 	while (1)
 	{
-//		HAL_RTC_GetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
-//		uartBuffLen = sprintf((char *)time, "%02d:%02d:%02d", sTime.Hours, sTime.Minutes, sTime.Seconds);
-//		HAL_UART_Transmit(&huart1, (uint8_t*)time, uartBuffLen, 100);
-		HAL_Delay(200);
+		HAL_ADC_Start(&hadc1);
+		if(HAL_ADC_PollForConversion(&hadc1, 5) == HAL_OK) {
+			/*measure batter voltage through ADC*/
+			batteryAdc = HAL_ADC_GetValue(&hadc1);
+			batteryVolt = ((batteryAdc * 4.2) / 128) + .25;
+			sprintf(batteryBuffer, "%.2fV", batteryVolt);
+		}
 		adxl_detect_tap();
-		char *ptr = &rxBuffer[0];
 		calc_x_y_z_values();
 		xlrmodes_angle_conversion();
 		xlrmodes_switch();
+
+		/*check if string exists in uart buffer*/
 		if(rxBuffer[count - 1] == '\n') {
-			if(!strncmp("png_begin", ptr, 9))
-			{
+			if(!strncmp("png_begin", ptr, 9)) { //store png data to EEPROM via uart
 				ptr = ptr + 9;
 				m95m02_write_array((uint8_t *)ptr, 1024, 1);
 				readPng = 0;
@@ -808,8 +1110,7 @@ int main(void)
 				count = 0;
 				usb_mode_init();
 			}
-			if(!strncmp("wav_begin:", ptr, 9))
-			{
+			if(!strncmp("wav_begin:", ptr, 9)) { //store pages to eeprom and send message back to GUI
 				sscanf(rxBuffer, "wav_begin:%d\n", &wavPages);
 				memset(rxBuffer, 0, count);
 				count = 0;
@@ -817,39 +1118,56 @@ int main(void)
 				HAL_UART_Transmit(&huart1, (uint8_t*)uartBuff, uartBuffLen, 100);
 				usb_mode_init();
 			}
-			if(!strncmp("wav:", ptr, 4))
-			{
-				while(currentPage != wavPages)
-				{
+			if(!strncmp("wav:", ptr, 4)) {
+				while(currentPage != wavPages) { //store wav file to EEPROM via uart
 					usb_mode_init();
-					if(rxBuffer[count - 1] == '\n')
-					{
+					if(rxBuffer[count - 1] == '\n') {
 						ptr = ptr + 4;
 						m95m02_write_array((uint8_t *)ptr, 256, currentPage + 5);
 						memset(rxBuffer, 0, count);
 						count = 0;
 						currentPage++;
-						uartBuffLen = sprintf(uartBuff, "wav:%d\n", currentPage);
-						HAL_UART_Transmit(&huart1, (uint8_t*)uartBuff, uartBuffLen, 100);
+						if(currentPage != wavPages) {
+							uartBuffLen = sprintf(uartBuff, "wav:%d\n", currentPage);
+							HAL_UART_Transmit(&huart1, (uint8_t*)uartBuff, uartBuffLen, 100);
+						}
 					}
 				}
+				currentPage = 0;
+				wavPages = 0;
 			}
-			if(!strncmp("time:", ptr, 5))
-			{
-
+			if(!strncmp("time:", ptr, 5)) { //update time when synced via GUI
+				for (int i = 5; i < 11; i++) {
+					*(ptr + i) -= 0x30; //convert string to decimal
+				}
+				sTime.Hours = *(ptr + 5) * 10 + *(ptr + 6);
+				sTime.Minutes = *(ptr + 7) * 10 + *(ptr + 8);
+				sTime.Seconds = *(ptr + 9) * 10 + *(ptr + 10);
+				sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+				sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+				HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN);
+				sprintf(clockbuffer, "%c", sTime.Hours);
+				sprintf(minuteBuffer, "%d", sTime.Minutes);
+				sprintf(secondBuffer, "%d", sTime.Seconds);
+				memset(rxBuffer, 0, count);
+				count = 0;
+				timeSync = 1;
 			}
-			if(!strncmp("USB", ptr, 3))
-			{
+			if(!strncmp("USB", ptr, 3)) { //reset buffer
 				usb_mode_init();
+				memset(rxBuffer, 0, count);
+				count = 0;
 			}
-			//read_png();
 		}
-		if ((HAL_GetTick() - currentUsbTime >= 1000) && (usb == 1))
-		{
-			usb = 0;
+		if ((HAL_GetTick() - currentUsbTime >= 1000) && (usb == 1)) {
+			usb = 0; //USB is no longer connected after 1 second
 		}
+		stopwatch_timer();
+		memset(rxBuffer, 0, count);
+		count = 0;
 		transmit_sensor_values();
 		display_mode();
+		update_time();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -874,14 +1192,8 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.LSIState = RCC_LSI_ON;
   RCC_OscInitStruct.MSIState = RCC_MSI_ON;
   RCC_OscInitStruct.MSICalibrationValue = 0;
-  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_6;
-  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
-  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_MSI;
-  RCC_OscInitStruct.PLL.PLLM = 1;
-  RCC_OscInitStruct.PLL.PLLN = 16;
-  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV7;
-  RCC_OscInitStruct.PLL.PLLQ = RCC_PLLQ_DIV2;
-  RCC_OscInitStruct.PLL.PLLR = RCC_PLLR_DIV2;
+  RCC_OscInitStruct.MSIClockRange = RCC_MSIRANGE_10;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_NONE;
   if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
   {
     Error_Handler();
@@ -890,7 +1202,7 @@ void SystemClock_Config(void)
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
-  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_MSI;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV1;
   RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
@@ -900,10 +1212,18 @@ void SystemClock_Config(void)
     Error_Handler();
   }
   PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_RTC|RCC_PERIPHCLK_USART1
-                              |RCC_PERIPHCLK_I2C1;
+                              |RCC_PERIPHCLK_I2C1|RCC_PERIPHCLK_ADC;
   PeriphClkInit.Usart1ClockSelection = RCC_USART1CLKSOURCE_PCLK2;
   PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_PCLK1;
+  PeriphClkInit.AdcClockSelection = RCC_ADCCLKSOURCE_PLLSAI1;
   PeriphClkInit.RTCClockSelection = RCC_RTCCLKSOURCE_LSI;
+  PeriphClkInit.PLLSAI1.PLLSAI1Source = RCC_PLLSOURCE_MSI;
+  PeriphClkInit.PLLSAI1.PLLSAI1M = 2;
+  PeriphClkInit.PLLSAI1.PLLSAI1N = 8;
+  PeriphClkInit.PLLSAI1.PLLSAI1P = RCC_PLLP_DIV7;
+  PeriphClkInit.PLLSAI1.PLLSAI1Q = RCC_PLLQ_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1R = RCC_PLLR_DIV2;
+  PeriphClkInit.PLLSAI1.PLLSAI1ClockOut = RCC_PLLSAI1_ADC1CLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -914,6 +1234,62 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+}
+
+/**
+  * @brief ADC1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_ADC1_Init(void)
+{
+
+  /* USER CODE BEGIN ADC1_Init 0 */
+
+  /* USER CODE END ADC1_Init 0 */
+
+  ADC_ChannelConfTypeDef sConfig = {0};
+
+  /* USER CODE BEGIN ADC1_Init 1 */
+
+  /* USER CODE END ADC1_Init 1 */
+  /** Common config
+  */
+  hadc1.Instance = ADC1;
+  hadc1.Init.ClockPrescaler = ADC_CLOCK_ASYNC_DIV1;
+  hadc1.Init.Resolution = ADC_RESOLUTION_8B;
+  hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
+  hadc1.Init.ScanConvMode = ADC_SCAN_DISABLE;
+  hadc1.Init.EOCSelection = ADC_EOC_SINGLE_CONV;
+  hadc1.Init.LowPowerAutoWait = DISABLE;
+  hadc1.Init.ContinuousConvMode = DISABLE;
+  hadc1.Init.NbrOfConversion = 1;
+  hadc1.Init.DiscontinuousConvMode = DISABLE;
+  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
+  hadc1.Init.DMAContinuousRequests = DISABLE;
+  hadc1.Init.Overrun = ADC_OVR_DATA_PRESERVED;
+  hadc1.Init.OversamplingMode = DISABLE;
+  if (HAL_ADC_Init(&hadc1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /** Configure Regular Channel
+  */
+  sConfig.Channel = ADC_CHANNEL_5;
+  sConfig.Rank = ADC_REGULAR_RANK_1;
+  sConfig.SamplingTime = ADC_SAMPLETIME_24CYCLES_5;
+  sConfig.SingleDiff = ADC_SINGLE_ENDED;
+  sConfig.OffsetNumber = ADC_OFFSET_NONE;
+  sConfig.Offset = 0;
+  if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN ADC1_Init 2 */
+
+  /* USER CODE END ADC1_Init 2 */
+
 }
 
 /**
@@ -1012,7 +1388,7 @@ static void MX_RTC_Init(void)
 {
 
   /* USER CODE BEGIN RTC_Init 0 */
-
+	__HAL_RCC_RTC_ENABLE();
   /* USER CODE END RTC_Init 0 */
 
   RTC_TimeTypeDef sTime = {0};
@@ -1043,38 +1419,38 @@ static void MX_RTC_Init(void)
 
   /** Initialize RTC and set the Time and Date
   */
-  sTime.Hours = 12;
-  sTime.Minutes = 59;
-  sTime.Seconds = 59;
+  sTime.Hours = 0x0;
+  sTime.Minutes = 0x0;
+  sTime.Seconds = 0x0;
   sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sTime.StoreOperation = RTC_STOREOPERATION_RESET;
-  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
-  sDate.WeekDay = RTC_WEEKDAY_WEDNESDAY;
-  sDate.Month = RTC_MONTH_SEPTEMBER;
-  sDate.Date = 21;
-  sDate.Year = 0;
+  sDate.WeekDay = RTC_WEEKDAY_MONDAY;
+  sDate.Month = RTC_MONTH_JANUARY;
+  sDate.Date = 0x1;
+  sDate.Year = 0x0;
 
-  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
   /** Enable the Alarm A
   */
-  sAlarm.AlarmTime.Hours = 0;
-  sAlarm.AlarmTime.Minutes = 0;
-  sAlarm.AlarmTime.Seconds = 0;
-  sAlarm.AlarmTime.SubSeconds = 0;
+  sAlarm.AlarmTime.Hours = 0x0;
+  sAlarm.AlarmTime.Minutes = 0x0;
+  sAlarm.AlarmTime.Seconds = 0x0;
+  sAlarm.AlarmTime.SubSeconds = 0x0;
   sAlarm.AlarmTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
   sAlarm.AlarmTime.StoreOperation = RTC_STOREOPERATION_RESET;
   sAlarm.AlarmMask = RTC_ALARMMASK_NONE;
   sAlarm.AlarmSubSecondMask = RTC_ALARMSUBSECONDMASK_ALL;
   sAlarm.AlarmDateWeekDaySel = RTC_ALARMDATEWEEKDAYSEL_DATE;
-  sAlarm.AlarmDateWeekDay = 1;
+  sAlarm.AlarmDateWeekDay = 0x1;
   sAlarm.Alarm = RTC_ALARM_A;
-  if (HAL_RTC_SetAlarm(&hrtc, &sAlarm, RTC_FORMAT_BIN) != HAL_OK)
+  if (HAL_RTC_SetAlarm_IT(&hrtc, &sAlarm, RTC_FORMAT_BCD) != HAL_OK)
   {
     Error_Handler();
   }
@@ -1307,16 +1683,18 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_3|GPIO_PIN_5, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin : PA0 */
-  GPIO_InitStruct.Pin = GPIO_PIN_0;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  /*Configure GPIO pin : PA2 */
+  GPIO_InitStruct.Pin = GPIO_PIN_2;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB0 PB1 PB3 PB5 */
@@ -1325,6 +1703,13 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI2_IRQn);
+
+  HAL_NVIC_SetPriority(EXTI3_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI3_IRQn);
 
 }
 
@@ -1337,122 +1722,133 @@ void xlrmodes_angle_conversion()
 	volCircle = atan2(-y, -x) + M_PI;
 }
 
+void volume_mode()
+{
+	flag = 0;
+	currentTime = HAL_GetTick();
+	if (currentTime - previousTime <= 1000)
+	{
+		orientation = VOLUME_MODE;
+		volMode = 1;
+	}
+}
+
 void xlrmodes_switch()
 {
-	if(volTime == 0) {
+	if(volTime == 0)
+	{
 		currentVolTime  = HAL_GetTick();
 	}
 
 	switch (orientation)
 	{
-	case STOPWATCH_MODE:
-		strcpy(modeName, "STOP");
-		if (pitchAngle >= -90 && pitchAngle <= -80) {
-			orientation = TEMPERATURE_MODE;
-		} else if (rollAngle >= -90 && rollAngle <= -80){
-			orientation = BATTERY_MODE;
-		} else if (pitchAngle >= 80 && pitchAngle <= 90) {
-			orientation = CLOCK_MODE;
-		} else if ( z >= 120 && flag == 0){
-			previousTime = HAL_GetTick();
-			flag = 1;
-		} else if (z <= 50 && flag == 1) {
-			flag = 0;
-			currentTime = HAL_GetTick();
-			if (currentTime - previousTime <= 10000){
-				orientation = VOLUME_MODE;
-				volMode = 1;
+		case STOPWATCH_MODE:
+			previousOrientation = orientation;
+			strcpy(modeName, "STOP");
+			if (pitchAngle >= -90 && pitchAngle <= -80) {
+				orientation = TEMPERATURE_MODE;
+			} else if (rollAngle >= -90 && rollAngle <= -80){
+				orientation = BATTERY_MODE;
+			} else if (pitchAngle >= 80 && pitchAngle <= 90) {
+				orientation = CLOCK_MODE;
+			} else if ( z >= 120 && flag == 0){
+				previousTime = HAL_GetTick();
+				flag = 1;
+			} else if (z <= 50 && flag == 1) {
+				volume_mode();
 			}
-		}
-		break;
-	case TEMPERATURE_MODE:
-		strcpy(modeName, "TEMP");
-		if (rollAngle >= 80 && rollAngle <= 90) {
-			orientation = STOPWATCH_MODE;
-		} else if (rollAngle >= -90 && rollAngle <= -80){
-			orientation = BATTERY_MODE;
-		} else if (pitchAngle >= 80 && pitchAngle <= 90) {
-			orientation = CLOCK_MODE;
-		}else if ( z >= 120 && flag == 0){
-			previousTime = HAL_GetTick();
-			flag = 1;
-		} else if (z <= 50 && flag == 1) {
-			flag = 0;
-			currentTime = HAL_GetTick();
-			if (currentTime - previousTime <= 1000){
-				orientation = VOLUME_MODE;
-				volMode = 1;
+			break;
+
+		case TEMPERATURE_MODE:
+			previousOrientation = orientation;
+			if (rollAngle >= 80 && rollAngle <= 90) {
+				orientation = STOPWATCH_MODE;
+			} else if (rollAngle >= -90 && rollAngle <= -80){
+				orientation = BATTERY_MODE;
+			} else if (pitchAngle >= 80 && pitchAngle <= 90) {
+				orientation = CLOCK_MODE;
+			}else if ( z >= 120 && flag == 0){
+				previousTime = HAL_GetTick();
+				flag = 1;
+			} else if (z <= 50 && flag == 1) {
+				volume_mode();
 			}
-		}
-		break;
-	case BATTERY_MODE:
-		strcpy(modeName, "BATT");
-		if (rollAngle >= 80 && rollAngle <= 90) {
-			orientation = STOPWATCH_MODE;
-		} else if (pitchAngle >= -90 && pitchAngle <= -80) {
-			orientation = TEMPERATURE_MODE;
-		} else if (pitchAngle >= 80 && pitchAngle <= 90) {
-			orientation = CLOCK_MODE;
-		}else if ( z >= 120 && flag == 0){
-			previousTime = HAL_GetTick();
-			flag = 1;
-		} else if (z <= 50 && flag == 1) {
-			flag = 0;
-			currentTime = HAL_GetTick();
-			if (currentTime - previousTime <= 1000){
-				orientation = VOLUME_MODE;
-				volMode = 1;
+			break;
+
+		case BATTERY_MODE:
+			previousOrientation = orientation;
+			if (rollAngle >= 80 && rollAngle <= 90) {
+				orientation = STOPWATCH_MODE;
+			} else if (pitchAngle >= -90 && pitchAngle <= -80) {
+				orientation = TEMPERATURE_MODE;
+			} else if (pitchAngle >= 80 && pitchAngle <= 90) {
+				orientation = CLOCK_MODE;
+			}else if ( z >= 120 && flag == 0){
+				previousTime = HAL_GetTick();
+				flag = 1;
+			} else if (z <= 50 && flag == 1) {
+				volume_mode();
 			}
-		}
-		break;
-	case CLOCK_MODE:
-		strcpy(modeName, "CLOCK");
-		if (rollAngle >= 80 && rollAngle <= 90) {
-			orientation = STOPWATCH_MODE;
-		} else if (rollAngle >= -90 && rollAngle <= -80){
-			orientation = BATTERY_MODE;
-		} else if (pitchAngle >= -90 && rollAngle <= -80) {
-			orientation = TEMPERATURE_MODE;
-		}else if ( z >= 120 && flag == 0){
-			previousTime = HAL_GetTick();
-			flag = 1;
-		} else if (z <= 50 && flag == 1) {
-			flag = 0;
-			currentTime = HAL_GetTick();
-			if (currentTime - previousTime <= 1000){
-				orientation = VOLUME_MODE;
-				volMode = 1;
+			break;
+
+		case CLOCK_MODE:
+			previousOrientation = orientation;
+			if (rollAngle >= 80 && rollAngle <= 90) {
+				orientation = STOPWATCH_MODE;
+			} else if (rollAngle >= -90 && rollAngle <= -80){
+				orientation = BATTERY_MODE;
+			} else if (pitchAngle >= -90 && rollAngle <= -80) {
+				orientation = TEMPERATURE_MODE;
+			}else if ( z >= 120 && flag == 0){
+				previousTime = HAL_GetTick();
+				flag = 1;
+			} else if (z <= 50 && flag == 1) {
+				volume_mode();
 			}
-		}
-		break;
+			break;
+
 	case VOLUME_MODE:
-		strcpy(modeName, "VOLUM");
+		previousOrientation = orientation;
+		//read_wav_from_eeprom();
+		HAL_DAC_Start_DMA(&hdac1, DAC_CHANNEL_1, wavTest, 1024, DAC_ALIGN_12B_R);
 		volSeg = round((13*volCircle)/(2*M_PI));
-		if (volMode != 0) {
+		if (volMode != 0)
+		{
 			previousSeg = volSeg;
 			volMode = 0;
 		}
 		int difAngle = 	volSeg - previousSeg;
-		if (difAngle != 0) {
-			if (difAngle < -10 || difAngle > 10) {
+		if (difAngle != 0)
+		{
+			if (difAngle < -10 || difAngle > 10)
+			{
 				difAngle = 0;
 			}
 			volTime = 0;
 			currentSeg += difAngle;
-			if (currentSeg > 13 ) {
+			if (currentSeg > 13 )
+			{
 				currentSeg = 13;
-			} else if (currentSeg < 0) {
+			}
+			else if (currentSeg < 0)
+			{
 				currentSeg = 0;
 			}
-	} else{
+		}
+		else
+		{
 			volTime = 1;
 		}
 		previousSeg = volSeg;
-		if (!volTime){
+		if (!volTime)
+		{
 			currentVolTime  = HAL_GetTick();
 		}
-		if ((HAL_GetTick() - currentVolTime >= 5000) && (volTime == 1)){
-			orientation = CLOCK_MODE;
+		if ((HAL_GetTick() - currentVolTime >= 5000) && (volTime == 1))
+		{
+			HAL_DAC_Stop_DMA(&hdac1, DAC_CHANNEL_1);
+			orientation = STOPWATCH_MODE;
+			m95m02_write_byte(0, currentSeg);
 			volTime = 0;
 		}
 	}
